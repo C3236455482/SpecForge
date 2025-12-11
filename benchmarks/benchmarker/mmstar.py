@@ -77,7 +77,7 @@ class MMStarBenchmarker(Benchmarker):
         os.makedirs(image_dir, exist_ok=True)
         print(f"Created temporary image directory: {self.cache_dir}")
 
-        dataset = load_dataset("Lin-Chen/MMStar")["val"]
+        dataset = load_dataset("/ch/datasets/MMStar")["val"]
         questions = []
         labels = []
         self.options_list = []

@@ -150,7 +150,7 @@ def process_sharegpt4v_row(row) -> Dict:
     }
     """
     conversations = row["conversations"]
-    image = f'FreedomIntelligence/ALLaVA-4V/{row["image"]}'
+    image = f'/ch/datasets/ALLaVA-4V/{row["image"]}'
     if not os.path.exists(image):
         print(f"Image path {image} does not exist, skipping this sample.")
         return None, None
@@ -240,7 +240,7 @@ def main():
         proc_fn = process_ultrachat_row
     elif args.dataset == "sharegpt":
         if args.data_path is None:
-            ds = load_dataset("Aeala/ShareGPT_Vicuna_unfiltered")["train"]
+            ds = load_dataset("/ch/datasets/ShareGPT_Vicuna_unfiltered")["train"]
         else:
             print("Loading dataset from custom data path: ", args.data_path)
             ds = load_dataset_from_path(Path(args.data_path))
@@ -260,7 +260,7 @@ def main():
         ds = load_dataset("Lin-Chen/ShareGPT4V", "ShareGPT4V")["train"]
         proc_fn = process_sharegpt4v_row
     elif args.dataset == "allava4v":
-        ds = load_dataset("FreedomIntelligence/ALLaVA-4V", name="allava_laion")[
+        ds = load_dataset("/ch/datasets/ALLaVA-4V", name="allava_laion")[
             "instruct"
         ]
         proc_fn = process_sharegpt4v_row

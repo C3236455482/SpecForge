@@ -226,6 +226,7 @@ def prepare_dp_dataloaders(
     pin_memory: Optional[bool] = False,
     shuffle: Optional[bool] = False,
     is_vlm: Optional[bool] = False,
+    vlm_text_only: Optional[bool] = False,
     prefetch_factor: Optional[int] = 2,
     **dataloader_kwargs
 ) -> DataLoader:
@@ -240,6 +241,7 @@ def prepare_dp_dataloaders(
         pin_memory: Whether to pin memory for data loading.
         shuffle: Whether to shuffle the dataset.
         is_vlm: Whether the dataset is a vision-language model dataset.
+        vlm_text_only: Whether the VLM dataset contains only text data (no images).
         **dataloader_kwargs: Additional keyword arguments for the DataLoader.
 
     Returns:
@@ -250,7 +252,7 @@ def prepare_dp_dataloaders(
     sampler = DistributedSampler(
         dataset, num_replicas=world_size, rank=rank, shuffle=shuffle
     )
-    if is_vlm:
+    if is_vlm and not vlm_text_only:
         datacollator_cls = VlmDataCollatorWithPadding
     else:
         datacollator_cls = DataCollatorWithPadding

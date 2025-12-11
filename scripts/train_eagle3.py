@@ -186,6 +186,11 @@ def parse_args() -> Tuple[ArgumentParser, Namespace]:
     # vlm related args
     vlm_group = parser.add_argument_group("vlm")
     vlm_group.add_argument(
+        "--vlm-text-only",
+        action="store_true",
+        help="Whether the VLM model should only use pure text data (no images). Only effective when --is-vlm is True.",
+    )
+    vlm_group.add_argument(
         "--min-pixels", type=int, default=50176
     )  # 64*28*28 for qwen2.5-vl
     vlm_group.add_argument(
@@ -260,6 +265,21 @@ def build_target_model(
                 .eval()
                 .cuda()
             )
+        elif (
+            args.is_vlm
+            and draft_model_config.target_model_type == "qwen3_vl"
+            and args.tp_size == 1
+        ):
+            from transformers import Qwen3VLForConditionalGeneration
+
+            target_model = (
+                Qwen3VLForConditionalGeneration.from_pretrained(
+                    pretrained_model_name_or_path=args.target_model_path,
+                    dtype=torch.bfloat16,
+                )
+                .eval()
+                .cuda()
+            )
         else:
             if args.target_model_backend == "sglang":
                 target_model_kwargs = SGLangBackendArgs.from_args(args).to_kwargs()
@@ -275,16 +295,17 @@ def build_target_model(
             )
 
         # set the aux hidden states layers
-        if (
-            hasattr(draft_model_config, "eagle_config")
-            and draft_model_config.eagle_config is not None
-            and "eagle_aux_hidden_state_layer_ids" in draft_model_config.eagle_config
-        ):
-            target_model.set_aux_hidden_states_layers(
-                draft_model_config.eagle_config["eagle_aux_hidden_state_layer_ids"]
-            )
-        else:
-            target_model.set_aux_hidden_states_layers()
+        if not args.is_vlm:
+            if (
+                hasattr(draft_model_config, "eagle_config")
+                and draft_model_config.eagle_config is not None
+                and "eagle_aux_hidden_state_layer_ids" in draft_model_config.eagle_config
+            ):
+                target_model.set_aux_hidden_states_layers(
+                    draft_model_config.eagle_config["eagle_aux_hidden_state_layer_ids"]
+                )
+            else:
+                target_model.set_aux_hidden_states_layers()
 
         if args.is_vlm:
             processor = AutoProcessor.from_pretrained(
@@ -396,6 +417,7 @@ def build_dataloaders(
             is_preformatted=args.is_preformatted,
             processor=processor,
             num_proc=args.build_dataset_num_proc,
+            vlm_text_only=args.vlm_text_only,
         )
         vocab_mapping_path = generate_vocab_mapping_file(
             dataset=train_eagle3_dataset,
@@ -418,6 +440,7 @@ def build_dataloaders(
         shuffle=True,
         process_group=get_dp_group(),
         is_vlm=args.is_vlm,
+        vlm_text_only=args.vlm_text_only,
     )
 
     if args.eval_data_path is not None or args.eval_hidden_states_path is not None:
@@ -432,6 +455,7 @@ def build_dataloaders(
                 processor=processor,
                 num_proc=args.build_dataset_num_proc,
                 is_preformatted=args.is_preformatted,
+                vlm_text_only=args.vlm_text_only,
             )
         elif args.eval_hidden_states_path is not None:
             eval_eagle3_dataset = build_offline_eagle3_dataset(
@@ -445,6 +469,7 @@ def build_dataloaders(
             shuffle=False,
             process_group=get_dp_group(),
             is_vlm=args.is_vlm,
+            vlm_text_only=args.vlm_text_only,
         )
         print_with_rank("Initialized eval dataloader")
     else:
@@ -506,13 +531,22 @@ def run_forward(
     is_online: bool = True,
 ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
     if args.is_vlm:
-        plosses, _, acces = eagle3_model(
-            input_ids=data["input_ids"].cuda(),
-            attention_mask=data["attention_mask"].cuda(),
-            loss_mask=data["loss_mask"].cuda(),
-            pixel_values=data["pixel_values"].cuda(),
-            image_grid_thw=data["image_grid_thw"].cuda(),
-        )
+        if args.vlm_text_only:
+            # VLM text-only mode: no pixel values or image grid
+            plosses, _, acces = eagle3_model(
+                input_ids=data["input_ids"].cuda(),
+                attention_mask=data["attention_mask"].cuda(),
+                loss_mask=data["loss_mask"].cuda(),
+            )
+        else:
+            # VLM multimodal mode: with pixel values and image grid
+            plosses, _, acces = eagle3_model(
+                input_ids=data["input_ids"].cuda(),
+                attention_mask=data["attention_mask"].cuda(),
+                loss_mask=data["loss_mask"].cuda(),
+                pixel_values=data["pixel_values"].cuda(),
+                image_grid_thw=data["image_grid_thw"].cuda(),
+            )
     else:
         if is_online:
             # we generate the eagle3 using the target model in an online fashion
@@ -655,7 +689,11 @@ def main():
     # ================================================
     if (
         args.is_vlm
-        and getattr(draft_model_config, "target_model_type", None) == "qwen2_5_vl"
+        and getattr(draft_model_config, "target_model_type", None)
+        in {
+            "qwen2_5_vl",
+            "qwen3_vl",
+        }
     ):
         eagle3_model = QwenVLOnlineEagle3Model(
             target_model=target_model,
@@ -663,6 +701,7 @@ def main():
             processor=processor,
             length=args.ttt_length,
             attention_backend=args.attention_backend,
+            text_only=args.vlm_text_only,
         )
     else:
         eagle3_model = OnlineEagle3Model(

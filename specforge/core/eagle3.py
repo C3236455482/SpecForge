@@ -297,12 +297,14 @@ class QwenVLOnlineEagle3Model(Eagle3Model):
         processor,
         length: int = 7,
         attention_backend: str = "sdpa",
+        text_only: bool = False,
     ):
         """
         Args:
             target_model: the target model to extract hidden states.
             draft_model: the draft model to be trained.
             length: TTT length, it means how many turns to unroll during TTT.
+            text_only: whether to use text-only mode (no images).
         """
         super().__init__()
         self.target_model = target_model
@@ -310,6 +312,7 @@ class QwenVLOnlineEagle3Model(Eagle3Model):
         self.processor = processor
         self.length = length
         self.attention_backend = attention_backend
+        self.text_only = text_only
 
     @torch.no_grad()
     def _prepare_data(
@@ -344,14 +347,24 @@ class QwenVLOnlineEagle3Model(Eagle3Model):
             device = input_ids.device
 
         # run the target model to get the hidden states
-        outputs = self.target_model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            pixel_values=pixel_values,
-            image_grid_thw=image_grid_thw,
-            output_hidden_states=True,
-            use_cache=False,
-        )
+        if self.text_only:
+            # Text-only mode: don't pass pixel_values and image_grid_thw
+            outputs = self.target_model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+                use_cache=False,
+            )
+        else:
+            # Multimodal mode: pass pixel_values and image_grid_thw
+            outputs = self.target_model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                pixel_values=pixel_values,
+                image_grid_thw=image_grid_thw,
+                output_hidden_states=True,
+                use_cache=False,
+            )
 
         # extract the aux hidden states
         # output_hidden_states = True will return the embedding output as well
@@ -480,12 +493,14 @@ class QwenVLOnlineEagle3Model(Eagle3Model):
                     attention_mask_tensor / torch.finfo(attention_mask_tensor.dtype).min
                 )
                 attention_mask_tensor = (1.0 - attention_mask_tensor).int()
+            if self.text_only:
+                image_grid_thw = None
 
             position_ids, rope_deltas = self.target_model.model.get_rope_index(
                 input_ids,
                 image_grid_thw,
                 None,
-                second_per_grid_ts=None,
+                # second_per_grid_ts=None,
                 attention_mask=attention_mask_tensor,
             )
             self.rope_deltas = rope_deltas

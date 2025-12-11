@@ -162,6 +162,105 @@ def preprocess_conversations(
         results["attention_mask"].append(torch.ones_like(loss_mask)[None, :])
     return results
 
+def preprocess_vlm_text_conversations(
+    processor: ImageProcessingMixin,
+    examples: List[Conversation],
+    chat_template: ChatTemplate,
+    max_length: int = 2048,
+) -> Dict[str, List[torch.Tensor]]:
+    """
+    Preprocess a batch of ShareGPT style conversations.
+
+    Args:
+        processor: The image processor to use for processing images.
+        examples: A list of examples, where each example is a dictionary containing:
+            - image: The image in the conversation.
+            - conversations: A list of conversations, where each conversation is a list of messages.
+        chat_template: The chat template to use for formatting the conversations.
+        max_length: The maximum length of the tokenized input.
+
+    Returns:
+        A dictionary containing:
+            - input_ids: List of tokenized input IDs.
+            - loss_mask: List of loss masks indicating which tokens should contribute to the loss.
+            - attention_mask: List of attention masks.
+            - pixel_values: List of pixel values for images in the examples.
+            - image_grid_thw: List of image grid tensors.
+    """
+    system_prompt = chat_template.system_prompt
+
+    # prepare result
+    results = {
+        "input_ids": [],
+        "loss_mask": [],
+        "attention_mask": [],
+    }
+
+    # Note: currently, we assume that each example has only one image
+    for i, source in enumerate(examples["conversations"]):
+        messages = [{"role": "system", "content": system_prompt}]
+        if not source:
+            # if the source is None, skip it
+            continue
+
+        if source[0]["role"] != "user":
+            # if the first message is not from user, skip it
+            source = source[1:]
+
+        convroles = ["user", "assistant"]
+        for j, sentence in enumerate(source):
+            role = sentence["role"]
+            assert role == convroles[j % 2], f"unexpected role {role}"
+            if role == "user":
+                # if the message is from user and has image, process the image
+                messages.append(
+                    {
+                        "role": role,
+                        "content": [
+                            {"type": "text", "text": sentence["content"]},
+                        ],
+                    }
+                )
+            else:
+                messages.append({"role": role, "content": sentence["content"]})
+
+        conversation = processor.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        # get vision infor use qwen_vl_utils
+        if not HAS_QWEN_VL_UTILS:
+            raise ImportError(
+                "qwen_vl_utils is required for VLM preprocessing but is not installed. "
+                "Please install it to use VLM features."
+            )
+
+        encoding = processor(
+            text=[conversation],
+            max_length=max_length,
+            truncation=True,
+            return_tensors="pt",
+            return_offsets_mapping=True,
+            add_special_tokens=False,
+        )
+        input_ids = encoding.input_ids[0]
+        offsets = encoding.offset_mapping[0]
+
+        # get conversation with image info for loss mask generation
+        decoded_conversation = processor.tokenizer.decode(
+            encoding.input_ids[0], skip_special_tokens=False
+        )
+
+        # Apply loss mask
+        loss_mask = _apply_loss_mask_from_chat_template(
+            decoded_conversation, offsets, chat_template
+        )
+
+        results["input_ids"].append(input_ids[None, :])
+        results["loss_mask"].append(loss_mask[None, :])
+        results["attention_mask"].append(torch.ones_like(loss_mask)[None, :])
+    return results
 
 def preprocess_vlm_conversations(
     processor: ImageProcessingMixin,
@@ -291,6 +390,7 @@ def build_eagle3_dataset(
     is_vlm: Optional[bool] = False,
     processor: Optional[ImageProcessingMixin] = None,
     is_preformatted: Optional[bool] = False,
+    vlm_text_only: Optional[bool] = False,
 ) -> HFDataset:
     """
     build eagle3 dataset
@@ -316,12 +416,15 @@ def build_eagle3_dataset(
                         the assistant spans for loss mask generation.
                         If True, expects "text" column with ready-to-train text.
                         If False, expects "conversations" column with ShareGPT format.
+        vlm_text_only: Whether to use text-only processing for VLM models. Only effective
+                        when is_vlm is True. If True, uses preprocess_vlm_text_conversations
+                        which doesn't require images.
 
     Returns:
         The processed HF dataset.
     """
-    if is_vlm:
-        assert processor is not None, "processor must be provided when is_vlm is True"
+    if is_vlm and not vlm_text_only:
+        assert processor is not None, "processor must be provided when is_vlm is True and vlm_text_only is False"
 
     # Validate chat_template requirement
     if chat_template is None:
@@ -339,12 +442,22 @@ def build_eagle3_dataset(
     def preprocess_function(examples):
         # Handle different dataset formats
         if is_vlm:
-            processed = preprocess_vlm_conversations(
-                processor,
-                examples,
-                template,
-                max_length,
-            )
+            if vlm_text_only:
+                # Use text-only VLM processing (no images required)
+                processed = preprocess_vlm_text_conversations(
+                    processor,
+                    examples,
+                    template,
+                    max_length,
+                )
+            else:
+                # Use full VLM processing with images
+                processed = preprocess_vlm_conversations(
+                    processor,
+                    examples,
+                    template,
+                    max_length,
+                )
         elif is_preformatted:
             # Handle pre-formatted text (should be in "text" column)
             if "text" not in examples:
@@ -394,7 +507,7 @@ def build_eagle3_dataset(
         )
 
     # adjust batch size based on dataset type
-    if is_vlm:
+    if is_vlm and not vlm_text_only:
         batch_size = (
             200  # reduce batch size for VLM datasets to avoid PyArrow offset overflow
         )
