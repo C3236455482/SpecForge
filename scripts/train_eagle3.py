@@ -436,7 +436,7 @@ def build_dataloaders(
     train_dataloader = prepare_dp_dataloaders(
         train_eagle3_dataset,
         args.target_batch_size,
-        num_workers=4,
+        num_workers=32,
         shuffle=True,
         process_group=get_dp_group(),
         is_vlm=args.is_vlm,
@@ -465,7 +465,7 @@ def build_dataloaders(
         eval_dataloader = prepare_dp_dataloaders(
             eval_eagle3_dataset,
             args.target_batch_size,
-            num_workers=4,
+            num_workers=32,
             shuffle=False,
             process_group=get_dp_group(),
             is_vlm=args.is_vlm,

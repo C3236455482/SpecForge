@@ -13,6 +13,9 @@ export WANDB_NAME="run-$(date +%Y%m%d-%H%M%S)"
 
 wandb login --relogin $WANDB_API_KEY
 
+# 64600 allava4v samples
+# 1 epoch  64600 / 8 / 8 = 1009 steps
+
 torchrun \
     --standalone \
     --nproc_per_node $NUM_GPUS \
@@ -21,10 +24,11 @@ torchrun \
     --draft-model-config $ROOT_DIR/configs/qwen3-vl-2b-eagle3.json \
     --train-data-path $ROOT_DIR/cache/dataset/allava4v_train.jsonl \
     --resume \
-    --output-dir $ROOT_DIR/outputs/Qwen3-VL-2B-eagle3 \
+    --output-dir $ROOT_DIR/outputs/Qwen3-VL-2B-eagle3-multimodal \
     --build-dataset-num-proc 0 \
     --num-epochs 10 \
-    --batch-size 2 \
+    --batch-size 8 \
+    --save-interval 1009 \
     --learning-rate 1e-4 \
     --max-length 8192 \
     --chat-template qwen3-vl \
